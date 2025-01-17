@@ -28,10 +28,8 @@
 (deftest can-create-and-close
   (go-test (let [refreshable (create identity 0)]
              (close! refreshable)
-             ;; eventually and asynchronously, the refreshable closes
-             (is (nil? (while (async/<! refreshable)
-                         ;; Pure busy-wait crushes Clojurescript and the close never completes.  Chill for a bit...
-                         (async/<! (async/timeout 100))))))))
+             ;; the refreshable closes synchronously
+             (is (nil? (async/<! refreshable))))))
 
 (deftest acquire-function-can-supply-fresh-values
   (go-test (closing [refreshable (create #(async/put! % true) 0)]
@@ -151,10 +149,7 @@
   (go-test (let [r (create (make-supplier 0) 0)]
              (async/<! r)
              (close! r)
-             ;; eventually and asynchronously, the refreshable closes
-             (while (async/<! r)
-                         ;; Pure busy-wait crushes Clojurescript and the close never completes.  Chill for a bit...
-               (async/<! (async/timeout 100)))
+             (async/<! r)
              (is (= {::uat/closed? true} (meta r))))))
 
 (deftest failsafe-option
