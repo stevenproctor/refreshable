@@ -30,7 +30,14 @@
   impl/WritePort
   (put! [port val fn1-handler] (impl/put! control val fn1-handler))
   impl/Channel
-  (close! [this] (impl/close! control))
+  (close! [this]
+    (async/close! control)
+    (let [[pc pc'] (reset-vals! out-ref (async/promise-chan))] ; can't close a delivered pc, so create a new one to close immediately
+      (vary-meta this #(-> %
+                           (dissoc ::acquired-at ::latency ::version)
+                           (assoc ::closed? true)))
+      (async/close! pc)
+      (async/close! pc')))
   ;; There is a reason this is not a public fn in clojure.core.async: it doesn't track `close!` synchronously.
   (closed? [this] (impl/closed? @out-ref))
   #?@(:clj (clojure.lang.IMeta
@@ -153,7 +160,7 @@
                                              (when-let [backoff (error-handler refreshable {:error-type ::validation-error :retry (first backoffs')})]
                                                [(async/timeout backoff) nil nil nil (rest backoffs') old])
 
-                                             :else
+                                             (not (::closed? (meta refreshable)))
                                              (let [latency (delta-t called-at now)
                                                    refresh-after (max 0 (- interval latency))]
                                                (vary-meta refreshable #(-> %
@@ -164,8 +171,9 @@
                                                  (async/offer! pc event) ; release any previously blocked takes
                                                  (async/offer! pc' event))
                                                (notify-watches* refreshable watches old event)
-                                               [(async/timeout refresh-after) nil nil nil backoffs event])))
-
+                                               [(async/timeout refresh-after) nil nil nil backoffs event])
+                                             :else
+                                             nil))
                                   failsafe (when-let [backoff (error-handler refreshable {:error-type ::failsafe})]
                                              [(async/timeout backoff) nil nil nil backoffs' old])
                                   control (when (not (nil? event))
@@ -173,20 +181,13 @@
                                               [(async/timeout 0) source failsafe called-at backoffs' old]
                                               [alarm source failsafe called-at backoffs' old])))]
           (recur a s f c bs o)
-          (let [[pc pc'] (reset-vals! out-ref (async/promise-chan))] ; can't close a delivered pc, so create a new one to close immediately
-            (vary-meta refreshable #(-> %
-                                        (dissoc ::acquired-at ::latency ::version)
-                                        (assoc ::closed? true)))
-            (async/close! pc)
-            (async/close! pc')))))
+          (async/close! refreshable))))
     refreshable))
 
 (def close! async/close!)
 
-(def closed? impl/closed?)
-
 (defn refresh! [refreshable]
-  (when-not (closed? refreshable)
+  (when-not (::closed? (meta refreshable))
     (async/put! refreshable true)))
 
 #?(:clj

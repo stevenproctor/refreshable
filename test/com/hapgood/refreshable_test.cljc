@@ -1,5 +1,5 @@
 (ns com.hapgood.refreshable-test
-  (:require [com.hapgood.refreshable :as uat :refer [create close! closed? refresh!] :include-macros true]
+  (:require [com.hapgood.refreshable :as uat :refer [create close! refresh!] :include-macros true]
             [clojure.core.async :as async]
             [clojure.core.async.impl.protocols :as impl]
             [clojure.test :refer [deftest is testing #?(:cljs async)]]
@@ -29,10 +29,9 @@
   (go-test (let [refreshable (create identity 0)]
              (close! refreshable)
              ;; eventually and asynchronously, the refreshable closes
-             (while (not (closed? refreshable))
+             (is (nil? (while (async/<! refreshable)
                          ;; Pure busy-wait crushes Clojurescript and the close never completes.  Chill for a bit...
-               (async/<! (async/timeout 100)))
-             (is (closed? refreshable)))))
+                         (async/<! (async/timeout 100))))))))
 
 (deftest acquire-function-can-supply-fresh-values
   (go-test (closing [refreshable (create #(async/put! % true) 0)]
@@ -153,7 +152,7 @@
              (async/<! r)
              (close! r)
              ;; eventually and asynchronously, the refreshable closes
-             (while (not (closed? r))
+             (while (async/<! r)
                          ;; Pure busy-wait crushes Clojurescript and the close never completes.  Chill for a bit...
                (async/<! (async/timeout 100)))
              (is (= {::uat/closed? true} (meta r))))))
@@ -233,17 +232,17 @@
      (closing [r (create (make-supplier 0)
                          100000
                          :backoffs [1]
-                         :error-handler (fn [_r e]
+                         :error-handler (fn [r e]
                                           (when (= ::uat/validation-error (:error-type e))
                                             (reset! validation-error-occurred true)
+                                            (close! r)
                                             nil))
                          :validator (fn [_v]
                                       (swap! validator-call-count inc)
                                       false))]
-              (async/<! (async/timeout 20))
+              (async/<! r)
               (is (= 1 @validator-call-count))
-              (is @validation-error-occurred)
-              (is (closed? r))))))
+              (is @validation-error-occurred)))))
 
 (deftest can-set-a-nil-validator
   (go-test
